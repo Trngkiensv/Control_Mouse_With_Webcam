@@ -2,18 +2,27 @@
 import os.path
 import time
 import pyautogui
+import keyboard
 
 class MouseController:
     def __init__(self):
         self.keypoints = [[] for _ in range(21)]  # Tạo danh sách 21 phần tử, tất cả là empty, example keypoints[1] = [12,23]
         self.signID = None
-        self.old_kp5 = [0, 0] # old coord of keypoint 5
+        self.old_kp_moving_point = [0, 0] # old coord of keypoint 5
         self.sensitive = 3
+        self.moving_point = 0
         pyautogui.FAILSAFE = True
 
     def main(self):
         last_modified = 0
         while True:
+            # runtime sensitivity adjustment
+            if keyboard.is_pressed('+'):
+                self.sensitive += 0.5
+                print(f"Sensitivity: {self.sensitive}")
+            if keyboard.is_pressed('-'):
+                self.sensitive -= 0.5
+                print(f"Sensitivity: {self.sensitive}")
             # Check if landmarks.txt has been updated
             try:
                 current_modified = os.path.getmtime('landmarks.txt')
@@ -27,11 +36,11 @@ class MouseController:
                 if self.signID == 4:
                     self.moving(self.sensitive)
                 elif self.signID == 1:
-                    self.lift_mouse()
+                    self.reset_mouse_reference()
             time.sleep(0.033)
 
-    def lift_mouse(self):
-        self.old_kp5 = self.keypoints[5]
+    def reset_mouse_reference(self):
+        self.old_kp_moving_point = self.keypoints[self.moving_point]
 
     def update(self):
         try:
@@ -74,19 +83,19 @@ class MouseController:
         """Reset keypoints and signID on error to avoid stale data."""
         self.keypoints = [[] for _ in range(21)]
         self.signID = None
-        # self.old_kp5 = [0, 0]
+        # self.old_kp_moving_point = [0, 0]
 
     # method for moving mouse
     def moving(self, sensitivity):
-        if len(self.keypoints[5]) != 2:
+        if len(self.keypoints[self.moving_point]) != 2:
             return
-        dist_x = (self.keypoints[5][0] - self.old_kp5[0])*sensitivity
-        dist_y = (self.keypoints[5][1] - self.old_kp5[1])*sensitivity
+        dist_x = (self.keypoints[self.moving_point][0] - self.old_kp_moving_point[0]) * sensitivity
+        dist_y = (self.keypoints[self.moving_point][1] - self.old_kp_moving_point[1]) * sensitivity
         current_mouse_x, current_mouse_y = pyautogui.position()
         current_mouse_x = current_mouse_x + dist_x
         current_mouse_y = current_mouse_y + dist_y
         pyautogui.moveTo(current_mouse_x, current_mouse_y)
-        self.old_kp5 = self.keypoints[5].copy()
+        self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
 
     # method get screensize for control mouse
     def getScreenSize(self):
