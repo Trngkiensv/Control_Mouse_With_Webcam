@@ -11,7 +11,11 @@ class MouseController:
         self.old_kp_moving_point = [0, 0] # old coord of keypoint 5
         self.sensitive = 3
         self.moving_point = 0
+        self.last_mouse_x = None
+        self.last_mouse_y = None
+        self.is_left_pressed = False
         pyautogui.FAILSAFE = True
+
 
     def main(self):
         last_modified = 0
@@ -21,22 +25,32 @@ class MouseController:
                 self.sensitive += 0.5
                 print(f"Sensitivity: {self.sensitive}")
             if keyboard.is_pressed('-'):
-                self.sensitive -= 0.5
+                self.sensitive = max(0.5, self.sensitive - 0.5)
                 print(f"Sensitivity: {self.sensitive}")
+            if keyboard.is_pressed('crtl shift b'):
+                break
             # Check if landmarks.txt has been updated
             try:
                 current_modified = os.path.getmtime('landmarks.txt')
-                if current_modified > last_modified:
-                    self.update()
-                    last_modified = current_modified
+                if self.signID is None:
+                    if current_modified > last_modified:
+                        self.update()
+                        last_modified = current_modified
+                        self.signID = 4 # force signID to moving sign when first read
+                else:
+                    if current_modified > last_modified:
+                        self.update()
+                        last_modified = current_modified
             except FileNotFoundError:
                 pass
             if all(len(kp) == 2 for kp in self.keypoints) and self.signID is not None:
-                # 4: moving, 1: close hand sign, 0: open hand sign
+                # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
                     self.moving(self.sensitive)
                 elif self.signID == 1:
                     self.reset_mouse_reference()
+                elif self.signID == 5:
+                    self.left_press()
             time.sleep(0.033)
 
     def reset_mouse_reference(self):
@@ -50,7 +64,6 @@ class MouseController:
                     print("Insufficient data in landmarks.txt")
                     self.reset_state()
                     return
-
                 new_keypoints = [[] for _ in range(21)]
                 for i in range(21):
                     try:
@@ -83,19 +96,35 @@ class MouseController:
         """Reset keypoints and signID on error to avoid stale data."""
         self.keypoints = [[] for _ in range(21)]
         self.signID = None
-        # self.old_kp_moving_point = [0, 0]
 
     # method for moving mouse
     def moving(self, sensitivity):
         if len(self.keypoints[self.moving_point]) != 2:
             return
+        # Calculate displacement
         dist_x = (self.keypoints[self.moving_point][0] - self.old_kp_moving_point[0]) * sensitivity
         dist_y = (self.keypoints[self.moving_point][1] - self.old_kp_moving_point[1]) * sensitivity
         current_mouse_x, current_mouse_y = pyautogui.position()
-        current_mouse_x = current_mouse_x + dist_x
-        current_mouse_y = current_mouse_y + dist_y
-        pyautogui.moveTo(current_mouse_x, current_mouse_y)
+        if self.last_mouse_x is None:
+            self.last_mouse_x, self.last_mouse_y = current_mouse_x, current_mouse_y
+
+        new_x = 0.3 * (current_mouse_x + dist_x) + 0.7 * self.last_mouse_x
+        new_y = 0.3 * (current_mouse_y + dist_y) + 0.7 * self.last_mouse_y
+        self.last_mouse_x, self.last_mouse_y = new_x, new_y
+        # Clamp to screen bounds
+        screen_width, screen_height = self.getScreenSize()
+        new_x = max(0, min(new_x, screen_width - 1))
+        new_y = max(0, min(new_y, screen_height - 1))
+        pyautogui.moveTo(new_x, new_y, duration=0.033, tween=pyautogui.easeInOutQuad)
         self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
+
+    def left_press(self):
+        current_mouse_x, current_mouse_y = pyautogui.position()
+        pyautogui.mouseDown(current_mouse_x, current_mouse_y, button='left')
+
+    def left_release(self):
+        current_mouse_x, current_mouse_y = pyautogui.position()
+        pyautogui.mouseUp(current_mouse_x, current_mouse_y, button='left')
 
     # method get screensize for control mouse
     def getScreenSize(self):
