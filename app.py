@@ -9,6 +9,7 @@ from collections import deque
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
+import multiprocessing
 
 from utils import CvFpsCalc
 from model import KeyPointClassifier
@@ -35,7 +36,7 @@ def get_args():
     return args
 
 
-def main():
+def main(queue):
     # Argument parsing #################################################################
     args = get_args()
 
@@ -139,10 +140,15 @@ def main():
                 # Hand sign classification
                 hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
                 # Mở file ở chế độ ghi ('w') và ghi một giá trị
-                with open('landmarks.txt', 'w') as file:# Giá trị muốn ghi
-                    for i in range(21):
-                        file.write(f"{i}:{landmark_list[i]}\n")
-                    file.write(f"{hand_sign_id}")
+                # with open('landmarks.txt', 'w') as file:# Giá trị muốn ghi
+                #     for i in range(21):
+                #         file.write(f"{i}:{landmark_list[i]}\n")
+                #     file.write(f"{hand_sign_id}")
+
+                try:
+                    queue.put_nowait([landmark_list, hand_sign_id])
+                except queue.Full:
+                    pass # pass if full
                 if hand_sign_id == "Not applicable":  # Point gesture
                     point_history.append(landmark_list[8])
                 else:
@@ -172,6 +178,11 @@ def main():
                 )
         else:
             point_history.append([0, 0])
+            # send empty if not recognize hand
+            try:
+                queue.put_nowait([[],None])
+            except queue.Full:
+                pass
 
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)
@@ -541,4 +552,5 @@ def draw_info(image, fps, mode, number):
 
 
 if __name__ == '__main__':
-    main()
+    queue = multiprocessing.Queue()
+    main(queue)

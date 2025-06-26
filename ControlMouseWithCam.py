@@ -3,20 +3,25 @@ import os.path
 import time
 import pyautogui
 import keyboard
+import multiprocessing
 
 class MouseController:
-    def __init__(self):
+    def __init__(self, queue):
         self.keypoints = [[] for _ in range(21)]  # Tạo danh sách 21 phần tử, tất cả là empty, example keypoints[1] = [12,23]
         self.signID = None
         self.old_kp_moving_point = [0, 0] # old coord of keypoint 0
         self.sensitive = 3
         self.moving_point = 0
+        self.queue = queue
         self.last_mouse_x , self.last_mouse_y = pyautogui.position()
         self.is_left_pressed = False
         pyautogui.FAILSAFE = True
 
 
-    def main(self):
+    def main(self, queue=None):
+        if queue is not None:
+            self.queue = queue
+
         last_modified = 0
         while True:
             # runtime sensitivity adjustment
@@ -67,39 +72,60 @@ class MouseController:
             print("Invalid keypoint data, skipping reset")
 
     def update(self):
+        # try:
+        #     with open('landmarks.txt', 'r') as file:
+        #         lines = file.readlines()
+        #         if len(lines) < 22:
+        #             print("Insufficient data in landmarks.txt")
+        #             self.reset_state()
+        #             return
+        #         new_keypoints = [[] for _ in range(21)]
+        #         for i in range(21):
+        #             try:
+        #                 coords = lines[i].split(':')[1].strip('[]\n').split(',')
+        #                 if len(coords) != 2:
+        #                     print(f"Invalid data format in line: {i}")
+        #                     self.reset_state()
+        #                     return
+        #                 new_keypoints[i] = [int(coords[0]),int(coords[1])]
+        #             except (IndexError, ValueError) as e:
+        #                 print(f"Error passing line: {i}: {e}")
+        #                 self.reset_state()
+        #                 return
+        #         try:
+        #             self.signID = int(lines[21].strip())
+        #         except ValueError:
+        #             print("Invalid sign ID format ")
+        #             self.reset_state()
+        #             return
+        #         # Update keypoints and old_kp5 only if parsing succeeds
+        #         self.keypoints = new_keypoints
+        # except FileNotFoundError:
+        #     print("File landmarks.txt not found, waiting for app.py to write...")
+        #     self.reset_state()
+        # except Exception as e:
+        #     print(f"Error reading file: {e}")
+        #     self.reset_state()
         try:
-            with open('landmarks.txt', 'r') as file:
-                lines = file.readlines()
-                if len(lines) < 22:
-                    print("Insufficient data in landmarks.txt")
-                    self.reset_state()
-                    return
-                new_keypoints = [[] for _ in range(21)]
-                for i in range(21):
-                    try:
-                        coords = lines[i].split(':')[1].strip('[]\n').split(',')
-                        if len(coords) != 2:
-                            print(f"Invalid data format in line: {i}")
-                            self.reset_state()
-                            return
-                        new_keypoints[i] = [int(coords[0]),int(coords[1])]
-                    except (IndexError, ValueError) as e:
-                        print(f"Error passing line: {i}: {e}")
-                        self.reset_state()
-                        return
-                try:
-                    self.signID = int(lines[21].strip())
-                except ValueError:
-                    print("Invalid sign ID format ")
-                    self.reset_state()
-                    return
-                # Update keypoints and old_kp5 only if parsing succeeds
-                self.keypoints = new_keypoints
-        except FileNotFoundError:
-            print("File landmarks.txt not found, waiting for app.py to write...")
-            self.reset_state()
-        except Exception as e:
-            print(f"Error reading file: {e}")
+            # get data from queue
+            landmark_list, hand_sign_id = self.queue.get.get_nowait()
+            if not landmark_list or hand_sign_id is None:
+                print("No landmark data, skipping update")
+                self.reset_state()
+                return
+            # check if data in landmark_list is valid
+            if len(landmark_list) != 21 or not all(len(coord) == 2 for coord in landmark_list):
+                print("Invalid landmark data, skipping update")
+                self.reset_state()
+                return
+            # update keypoints and signID
+            self.keypoints = [[int(x), int(y)] for x, y in landmark_list]
+            self.signID = int(hand_sign_id)
+            print("Updated keypoints and hand sign id")
+        except multiprocessing.queues.Empty:
+            pass
+        except (ValueError, IndexError) as e:
+            print("Error processing queue:", e)
             self.reset_state()
 
     def reset_state(self):
