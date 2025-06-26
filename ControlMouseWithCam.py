@@ -8,11 +8,10 @@ class MouseController:
     def __init__(self):
         self.keypoints = [[] for _ in range(21)]  # Tạo danh sách 21 phần tử, tất cả là empty, example keypoints[1] = [12,23]
         self.signID = None
-        self.old_kp_moving_point = [0, 0] # old coord of keypoint 5
+        self.old_kp_moving_point = [0, 0] # old coord of keypoint 0
         self.sensitive = 3
         self.moving_point = 0
-        self.last_mouse_x = None
-        self.last_mouse_y = None
+        self.last_mouse_x , self.last_mouse_y = pyautogui.position()
         self.is_left_pressed = False
         pyautogui.FAILSAFE = True
 
@@ -27,7 +26,7 @@ class MouseController:
             if keyboard.is_pressed('-'):
                 self.sensitive = max(0.5, self.sensitive - 0.5)
                 print(f"Sensitivity: {self.sensitive}")
-            if keyboard.is_pressed('crtl shift b'):
+            if keyboard.is_pressed('ctrl+shift+b'):
                 break
             # Check if landmarks.txt has been updated
             try:
@@ -36,7 +35,7 @@ class MouseController:
                     if current_modified > last_modified:
                         self.update()
                         last_modified = current_modified
-                        self.signID = 4 # force signID to moving sign when first read
+                        self.signID = 4 # force signID to move sign when first read
                 else:
                     if current_modified > last_modified:
                         self.update()
@@ -46,15 +45,26 @@ class MouseController:
             if all(len(kp) == 2 for kp in self.keypoints) and self.signID is not None:
                 # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
+                    if self.is_left_pressed:
+                        self.left_release()
+                        self.is_left_pressed = False
                     self.moving(self.sensitive)
                 elif self.signID == 1:
                     self.reset_mouse_reference()
                 elif self.signID == 5:
-                    self.left_press()
+                    if not self.is_left_pressed:
+                        self.left_press()
+                        self.is_left_pressed = True
+                        self.moving(self.sensitive)
+                    else:
+                        self.moving(self.sensitive)
             time.sleep(0.033)
 
     def reset_mouse_reference(self):
-        self.old_kp_moving_point = self.keypoints[self.moving_point]
+        if len(self.keypoints[self.moving_point]) == 2:
+            self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
+        else:
+            print("Invalid keypoint data, skipping reset")
 
     def update(self):
         try:
@@ -105,8 +115,8 @@ class MouseController:
         dist_x = (self.keypoints[self.moving_point][0] - self.old_kp_moving_point[0]) * sensitivity
         dist_y = (self.keypoints[self.moving_point][1] - self.old_kp_moving_point[1]) * sensitivity
         current_mouse_x, current_mouse_y = pyautogui.position()
-        if self.last_mouse_x is None:
-            self.last_mouse_x, self.last_mouse_y = current_mouse_x, current_mouse_y
+        # if self.last_mouse_x is None:
+        #     self.last_mouse_x, self.last_mouse_y = current_mouse_x, current_mouse_y
 
         new_x = 0.3 * (current_mouse_x + dist_x) + 0.7 * self.last_mouse_x
         new_y = 0.3 * (current_mouse_y + dist_y) + 0.7 * self.last_mouse_y
@@ -121,6 +131,7 @@ class MouseController:
     def left_press(self):
         current_mouse_x, current_mouse_y = pyautogui.position()
         pyautogui.mouseDown(current_mouse_x, current_mouse_y, button='left')
+
 
     def left_release(self):
         current_mouse_x, current_mouse_y = pyautogui.position()
