@@ -95,6 +95,9 @@ def main(queue):
 
     #  ########################################################################
     mode = 0
+    last_landmark_list = None
+    last_hand_sign_id = None
+    landmark_threshold = 5
     while True:
         fps = cvFpsCalc.get()
 
@@ -144,11 +147,22 @@ def main(queue):
                 #     for i in range(21):
                 #         file.write(f"{i}:{landmark_list[i]}\n")
                 #     file.write(f"{hand_sign_id}")
-
-                try:
-                    queue.put_nowait([landmark_list, hand_sign_id])
-                except queue.Full:
-                    pass # pass if full
+                should_send = False
+                if last_hand_sign_id != hand_sign_id:
+                    should_send = True
+                elif last_landmark_list is not None and len(landmark_list) == 21:
+                    # Tính sự khác biệt tọa độ keypoint 0
+                    diff = np.abs(np.array(landmark_list[0]) - np.array(last_landmark_list[0]))
+                    if np.any(diff > landmark_threshold):
+                        should_send = True
+                if should_send:
+                    try:
+                        queue.put_nowait([landmark_list, hand_sign_id])
+                        print(f"Sent to queue: {hand_sign_id}")
+                        last_landmark_list = landmark_list
+                        last_hand_sign_id = hand_sign_id
+                    except queue.Full:
+                        print("Queue is full")
                 if hand_sign_id == "Not applicable":  # Point gesture
                     point_history.append(landmark_list[8])
                 else:
@@ -178,11 +192,14 @@ def main(queue):
                 )
         else:
             point_history.append([0, 0])
-            # send empty if not recognize hand
-            try:
-                queue.put_nowait([[],None])
-            except queue.Full:
-                pass
+            if last_hand_sign_id is not None or last_landmark_list is not None:
+                try:
+                    queue.put_nowait([[], None])
+                    print("Sent empty data to queue (no hand detected)")
+                    last_landmark_list = None
+                    last_hand_sign_id = None
+                except queue.Full:
+                    print("Queue full, skipping send")
 
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)

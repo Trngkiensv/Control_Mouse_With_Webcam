@@ -1,5 +1,4 @@
 # ControlMouseWithCam.py
-import os.path
 import time
 import pyautogui
 import keyboard
@@ -13,16 +12,13 @@ class MouseController:
         self.sensitive = 3
         self.moving_point = 0
         self.queue = queue
-        self.last_mouse_x , self.last_mouse_y = pyautogui.position()
+        self.last_mouse_x, self.last_mouse_y = pyautogui.position()
         self.is_left_pressed = False
         pyautogui.FAILSAFE = True
 
 
-    def main(self, queue=None):
-        if queue is not None:
-            self.queue = queue
-
-        last_modified = 0
+    def main(self):
+        first_update = True
         while True:
             # runtime sensitivity adjustment
             if keyboard.is_pressed('+'):
@@ -31,22 +27,11 @@ class MouseController:
             if keyboard.is_pressed('-'):
                 self.sensitive = max(0.5, self.sensitive - 0.5)
                 print(f"Sensitivity: {self.sensitive}")
-            if keyboard.is_pressed('ctrl+shift+b'):
-                break
-            # Check if landmarks.txt has been updated
-            try:
-                current_modified = os.path.getmtime('landmarks.txt')
-                if self.signID is None:
-                    if current_modified > last_modified:
-                        self.update()
-                        last_modified = current_modified
-                        self.signID = 4 # force signID to move sign when first read
-                else:
-                    if current_modified > last_modified:
-                        self.update()
-                        last_modified = current_modified
-            except FileNotFoundError:
-                pass
+            # Update from queue
+            self.update()
+            if first_update and self.signID is not None:
+                self.signID = 4  # Force signID to moving on first valid read
+                first_update = False
             if all(len(kp) == 2 for kp in self.keypoints) and self.signID is not None:
                 # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
@@ -63,7 +48,7 @@ class MouseController:
                         self.moving(self.sensitive)
                     else:
                         self.moving(self.sensitive)
-            time.sleep(0.033)
+            # time.sleep(0.033)
 
     def reset_mouse_reference(self):
         if len(self.keypoints[self.moving_point]) == 2:
@@ -108,7 +93,7 @@ class MouseController:
         #     self.reset_state()
         try:
             # get data from queue
-            landmark_list, hand_sign_id = self.queue.get.get_nowait()
+            landmark_list, hand_sign_id = self.queue.get_nowait()
             if not landmark_list or hand_sign_id is None:
                 print("No landmark data, skipping update")
                 self.reset_state()
@@ -124,8 +109,8 @@ class MouseController:
             print("Updated keypoints and hand sign id")
         except multiprocessing.queues.Empty:
             pass
-        except (ValueError, IndexError) as e:
-            print("Error processing queue:", e)
+        except (ValueError, TypeError) as e:
+            print(f"Error processing queue data: {e}")
             self.reset_state()
 
     def reset_state(self):
@@ -151,7 +136,7 @@ class MouseController:
         screen_width, screen_height = self.getScreenSize()
         new_x = max(0, min(new_x, screen_width - 1))
         new_y = max(0, min(new_y, screen_height - 1))
-        pyautogui.moveTo(new_x, new_y, duration=0.033, tween=pyautogui.easeInOutQuad)
+        pyautogui.moveTo(new_x, new_y, duration=0.0, tween=pyautogui.easeInOutQuad)
         self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
 
     def left_press(self):
