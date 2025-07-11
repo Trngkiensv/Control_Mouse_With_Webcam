@@ -2,7 +2,7 @@ import multiprocessing as mp
 import keyboard
 from app import main as app_main
 from ControlMouseWithCam import MouseController
-# from test_queue import main as test_main 
+from test_queue import main as test_main
 
 if __name__ == '__main__':
     # create queue
@@ -10,7 +10,7 @@ if __name__ == '__main__':
     # create process of app.py and ControlMouseWithCam.py
     app_process = mp.Process(target=app_main, args=(queue,))
     mouse_process = mp.Process(target=MouseController(queue).main, args=())
-    # test_process = mp.Process(target=test_main, args=(queue,))
+    test_process = mp.Process(target=test_main, args=(queue,))
     try:
         # start processes
         app_process.start()

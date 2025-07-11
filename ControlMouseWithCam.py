@@ -3,6 +3,7 @@ import time
 import pyautogui
 import keyboard
 import multiprocessing
+from pynput.mouse import Controller, Button
 
 class MouseController:
     def __init__(self, queue):
@@ -15,24 +16,16 @@ class MouseController:
         self.last_mouse_x, self.last_mouse_y = pyautogui.position()
         self.is_left_pressed = False
         pyautogui.FAILSAFE = True
+        self.mouse = Controller()
+        self.first_update = True
 
 
     def main(self):
-        first_update = True
         while True:
-            # runtime sensitivity adjustment
-            if keyboard.is_pressed('+'):
-                self.sensitive += 0.5
-                print(f"Sensitivity: {self.sensitive}")
-            if keyboard.is_pressed('-'):
-                self.sensitive = max(0.5, self.sensitive - 0.5)
-                print(f"Sensitivity: {self.sensitive}")
             # Update from queue
             self.update()
-            if first_update and self.signID is not None:
-                self.signID = 4  # Force signID to moving on first valid read
-                first_update = False
-            if all(len(kp) == 2 for kp in self.keypoints) and self.signID is not None:
+            startTime = time.time()
+            if self.signID is not None:
                 # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
                     if self.is_left_pressed:
@@ -48,7 +41,9 @@ class MouseController:
                         self.moving(self.sensitive)
                     else:
                         self.moving(self.sensitive)
-            # time.sleep(0.033)
+            endTime = time.time()
+            print(endTime - startTime)
+            # time.sleep(0.01)
 
     def reset_mouse_reference(self):
         if len(self.keypoints[self.moving_point]) == 2:
@@ -57,56 +52,22 @@ class MouseController:
             print("Invalid keypoint data, skipping reset")
 
     def update(self):
-        # try:
-        #     with open('landmarks.txt', 'r') as file:
-        #         lines = file.readlines()
-        #         if len(lines) < 22:
-        #             print("Insufficient data in landmarks.txt")
-        #             self.reset_state()
-        #             return
-        #         new_keypoints = [[] for _ in range(21)]
-        #         for i in range(21):
-        #             try:
-        #                 coords = lines[i].split(':')[1].strip('[]\n').split(',')
-        #                 if len(coords) != 2:
-        #                     print(f"Invalid data format in line: {i}")
-        #                     self.reset_state()
-        #                     return
-        #                 new_keypoints[i] = [int(coords[0]),int(coords[1])]
-        #             except (IndexError, ValueError) as e:
-        #                 print(f"Error passing line: {i}: {e}")
-        #                 self.reset_state()
-        #                 return
-        #         try:
-        #             self.signID = int(lines[21].strip())
-        #         except ValueError:
-        #             print("Invalid sign ID format ")
-        #             self.reset_state()
-        #             return
-        #         # Update keypoints and old_kp5 only if parsing succeeds
-        #         self.keypoints = new_keypoints
-        # except FileNotFoundError:
-        #     print("File landmarks.txt not found, waiting for app.py to write...")
-        #     self.reset_state()
-        # except Exception as e:
-        #     print(f"Error reading file: {e}")
-        #     self.reset_state()
         try:
-            # get data from queue
             landmark_list, hand_sign_id = self.queue.get_nowait()
-            if not landmark_list or hand_sign_id is None:
+            if landmark_list is not None and hand_sign_id is not None:
+                if len(landmark_list) == 21 and all(len(coord) == 2 for coord in landmark_list):
+                    self.keypoints = [[int(x), int(y)] for x, y in landmark_list]
+                    self.signID = int(hand_sign_id)
+                    if self.first_update:
+                        self.signID = 4  # Force signID to moving on first valid read
+                        self.first_update = False
+                    print("Updated keypoints and hand sign id")
+                else:
+                    print("Invalid landmark data, skipping update")
+                    self.reset_state()
+            elif landmark_list is None and hand_sign_id is None:
                 print("No landmark data, skipping update")
                 self.reset_state()
-                return
-            # check if data in landmark_list is valid
-            if len(landmark_list) != 21 or not all(len(coord) == 2 for coord in landmark_list):
-                print("Invalid landmark data, skipping update")
-                self.reset_state()
-                return
-            # update keypoints and signID
-            self.keypoints = [[int(x), int(y)] for x, y in landmark_list]
-            self.signID = int(hand_sign_id)
-            print("Updated keypoints and hand sign id")
         except multiprocessing.queues.Empty:
             pass
         except (ValueError, TypeError) as e:
@@ -118,35 +79,30 @@ class MouseController:
         self.keypoints = [[] for _ in range(21)]
         self.signID = None
 
+
     # method for moving mouse
     def moving(self, sensitivity):
-        if len(self.keypoints[self.moving_point]) != 2:
-            return
         # Calculate displacement
         dist_x = (self.keypoints[self.moving_point][0] - self.old_kp_moving_point[0]) * sensitivity
         dist_y = (self.keypoints[self.moving_point][1] - self.old_kp_moving_point[1]) * sensitivity
-        current_mouse_x, current_mouse_y = pyautogui.position()
-        # if self.last_mouse_x is None:
-        #     self.last_mouse_x, self.last_mouse_y = current_mouse_x, current_mouse_y
-
+        current_mouse_x, current_mouse_y = self.mouse.position
         new_x = 0.3 * (current_mouse_x + dist_x) + 0.7 * self.last_mouse_x
         new_y = 0.3 * (current_mouse_y + dist_y) + 0.7 * self.last_mouse_y
         self.last_mouse_x, self.last_mouse_y = new_x, new_y
         # Clamp to screen bounds
-        screen_width, screen_height = self.getScreenSize()
+        screen_width, screen_height = pyautogui.size()
         new_x = max(0, min(new_x, screen_width - 1))
         new_y = max(0, min(new_y, screen_height - 1))
-        pyautogui.moveTo(new_x, new_y, duration=0.0, tween=pyautogui.easeInOutQuad)
+        # pyautogui.moveTo(new_x, new_y, duration=0.0, tween=pyautogui.easeInOutQuad)
+        self.mouse.position = (new_x, new_y)
         self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
 
     def left_press(self):
-        current_mouse_x, current_mouse_y = pyautogui.position()
-        pyautogui.mouseDown(current_mouse_x, current_mouse_y, button='left')
+        self.mouse.press(Button.left)
 
 
     def left_release(self):
-        current_mouse_x, current_mouse_y = pyautogui.position()
-        pyautogui.mouseUp(current_mouse_x, current_mouse_y, button='left')
+        self.mouse.release(Button.left)
 
     # method get screensize for control mouse
     def getScreenSize(self):
