@@ -10,27 +10,32 @@ class MouseController:
         self.keypoints = [[] for _ in range(21)]  # Tạo danh sách 21 phần tử, tất cả là empty, example keypoints[1] = [12,23]
         self.signID = None
         self.old_kp_moving_point = [0, 0] # old coord of keypoint 0
-        self.sensitive = 3
+        self.sensitive = 7
         self.moving_point = 0
         self.queue = queue
         self.last_mouse_x, self.last_mouse_y = pyautogui.position()
         self.is_left_pressed = False
+        self.is_right_pressed = False
         pyautogui.FAILSAFE = True
         self.mouse = Controller()
         self.first_update = True
-
+        self.count_to_scroll = 0
+        self.last_scroll_direction = ""
+        self.scroll_count = 0
 
     def main(self):
         while True:
             # Update from queue
             self.update()
-            startTime = time.time()
             if self.signID is not None:
                 # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
                     if self.is_left_pressed:
                         self.left_release()
                         self.is_left_pressed = False
+                    if self.is_right_pressed:
+                        self.right_release()
+                        self.is_right_pressed = False
                     self.moving(self.sensitive)
                 elif self.signID == 1:
                     self.reset_mouse_reference()
@@ -41,15 +46,38 @@ class MouseController:
                         self.moving(self.sensitive)
                     else:
                         self.moving(self.sensitive)
-            endTime = time.time()
-            print(endTime - startTime)
-            # time.sleep(0.01)
+                elif self.signID == 6:
+                    if not self.is_right_pressed:
+                        self.right_press()
+                        self.is_right_pressed = True
+                        self.moving(self.sensitive)
+                    else:
+                        self.moving(self.sensitive)
+                elif self.signID == 7:
+                    if self.is_left_pressed or self.is_right_pressed:
+                        self.left_release()
+                        self.is_left_pressed = False
+                        self.right_press()
+                        self.is_right_pressed = False
+                    self.scroll_up()
+                elif self.signID == 8:
+                    if self.is_left_pressed or self.is_right_pressed:
+                        self.left_release()
+                        self.is_left_pressed = False
+                        self.right_press()
+                        self.is_right_pressed = False
+                    self.scroll_down()
+                print(f"hand_sign_id: {self.signID}")
+            time.sleep(0.005)
 
     def reset_mouse_reference(self):
         if len(self.keypoints[self.moving_point]) == 2:
             self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
         else:
             print("Invalid keypoint data, skipping reset")
+        self.scroll_count = 0
+        self.last_scroll_direction = ""
+        self.count_to_scroll = 0
 
     def update(self):
         try:
@@ -61,7 +89,6 @@ class MouseController:
                     if self.first_update:
                         self.signID = 4  # Force signID to moving on first valid read
                         self.first_update = False
-                    print("Updated keypoints and hand sign id")
                 else:
                     print("Invalid landmark data, skipping update")
                     self.reset_state()
@@ -104,10 +131,44 @@ class MouseController:
     def left_release(self):
         self.mouse.release(Button.left)
 
+    def right_press(self):
+        self.mouse.press(Button.right)
+
+
+    def right_release(self):
+        self.mouse.release(Button.right)
+
     # method get screensize for control mouse
     def getScreenSize(self):
         return pyautogui.size()
 
+    def scroll_up(self):  # Lăn chuột len
+        if self.count_to_scroll >= 20:
+            self.mouse.scroll(0, 1)
+            self.scroll_count += 1
+            self.count_to_scroll = 0
+            self.adjust_count_to_scroll("up")
+        else:
+            self.adjust_count_to_scroll("up")
+
+    def scroll_down(self):
+        if self.count_to_scroll >= 20:
+            self.mouse.scroll(0, -1)
+            self.scroll_count += 1
+            self.count_to_scroll = 0
+            self.adjust_count_to_scroll("down")
+        else:
+            self.adjust_count_to_scroll("down")
+
+    def adjust_count_to_scroll(self, direction):
+        if direction == self.last_scroll_direction:
+            self.count_to_scroll += 1
+        else:
+            self.last_scroll_direction = direction
+            self.scroll_count = 0
+            self.count_to_scroll = 0
+        if self.scroll_count >= 5:
+            self.count_to_scroll = max(15, self.count_to_scroll)
 
 if __name__ == "__main__":
     controller = MouseController()

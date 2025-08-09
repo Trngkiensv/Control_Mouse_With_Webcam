@@ -4,6 +4,7 @@ import csv
 import copy
 import argparse
 import itertools
+import time
 from collections import Counter
 from collections import deque
 import cv2 as cv
@@ -97,12 +98,16 @@ def main(queue):
     mode = 0
     last_landmark_list = None
     last_hand_sign_id = None
-    landmark_threshold = 5
+    current_hand_sign_id = None
+    sign_id_count = 0
+    last_send_time = 0
+    min_send_interval = 0.05
+    landmark_threshold = 50
     while True:
         fps = cvFpsCalc.get()
 
         # Process Key (ESC: end) #################################################
-        key = cv.waitKey(10)
+        key = cv.waitKey(1)
         if key == 27:  # ESC
             break
         number, mode = select_mode(key, mode)
@@ -129,7 +134,6 @@ def main(queue):
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
                 # Landmark calculation
                 landmark_list = calc_landmark_list(debug_image, hand_landmarks)
-                landmark_0 = landmark_list[0]
 
                 # Conversion to relative coordinates / normalized coordinates
                 pre_processed_landmark_list = pre_process_landmark(
@@ -141,29 +145,34 @@ def main(queue):
                             pre_processed_point_history_list)
 
                 # Hand sign classification
-                hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                # Mở file ở chế độ ghi ('w') và ghi một giá trị
-                # with open('landmarks.txt', 'w') as file:# Giá trị muốn ghi
-                #     for i in range(21):
-                #         file.write(f"{i}:{landmark_list[i]}\n")
-                #     file.write(f"{hand_sign_id}")
+                current_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
                 should_send = False
-                if last_hand_sign_id != hand_sign_id:
-                    should_send = True
-                elif last_landmark_list is not None and len(landmark_list) == 21:
-                    # Tính sự khác biệt tọa độ keypoint 0
-                    diff = np.abs(np.array(landmark_list[0]) - np.array(last_landmark_list[0]))
-                    if np.any(diff > landmark_threshold):
+                send_sign_id = last_hand_sign_id
+                current_time = time.time()
+
+                if current_hand_sign_id == last_hand_sign_id:
+                    sign_id_count += 1
+                    if sign_id_count >= 5:  # Lặp lại lần thứ hai
+                        send_sign_id = current_hand_sign_id
                         should_send = True
-                if should_send:
+                else:
+                    sign_id_count = 1  # Reset đếm khi hand_sign_id thay đổi
+                    last_hand_sign_id = current_hand_sign_id
+                    # Gửi hand_sign_id cũ nếu lặp dưới 2 lần và keypoint 0 thay đổi
+                    if last_landmark_list is not None and len(landmark_list) == 21 and last_hand_sign_id is not None:
+                        diff = np.abs(np.array(landmark_list[0]) - np.array(last_landmark_list[0]))
+                        if np.any(diff > landmark_threshold):
+                            should_send = True
+                if should_send and (current_time - last_send_time) >= min_send_interval:
                     try:
-                        queue.put_nowait([landmark_list, hand_sign_id])
-                        print(f"Sent to queue: {hand_sign_id}")
+                        queue.put_nowait([landmark_list, send_sign_id])
+                        print(f"Sent to queue: signID={send_sign_id}")
                         last_landmark_list = landmark_list
-                        last_hand_sign_id = hand_sign_id
+                        last_send_time = current_time
                     except queue.Full:
-                        print("Queue is full")
-                if hand_sign_id == "Not applicable":  # Point gesture
+                        print("Queue full, skipping send")
+
+                if current_hand_sign_id == "Not applicable":
                     point_history.append(landmark_list[8])
                 else:
                     point_history.append([0, 0])
@@ -187,7 +196,7 @@ def main(queue):
                     debug_image,
                     brect,
                     handedness,
-                    keypoint_classifier_labels[hand_sign_id],
+                    keypoint_classifier_labels[current_hand_sign_id],
                     point_history_classifier_labels[most_common_fg_id[0][0]],
                 )
         else:

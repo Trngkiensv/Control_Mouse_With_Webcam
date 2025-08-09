@@ -17,8 +17,8 @@ if __name__ == '__main__':
         mouse_process.start()
         # test_process.start()
         while True:
-            if keyboard.is_pressed('ctrl+shift+b'):
-                print("Ctrl+Shift+B pressed, terminating processes...")
+            if keyboard.is_pressed('ctrl+shift+g'):
+                print("Ctrl+Shift+G pressed, terminating processes...")
                 app_process.terminate()
                 mouse_process.terminate()
                 # test_process.terminate()
