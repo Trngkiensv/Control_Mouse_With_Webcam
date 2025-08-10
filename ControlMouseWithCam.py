@@ -1,16 +1,17 @@
 # ControlMouseWithCam.py
-import time
-import pyautogui
-import keyboard
 import multiprocessing
+import time
+import logging
+import pyautogui
 from pynput.mouse import Controller, Button
 
+
 class MouseController:
-    def __init__(self, queue):
+    def __init__(self, queue, sensitive_var):
+        self.sensitive_var = sensitive_var
         self.keypoints = [[] for _ in range(21)]  # Tạo danh sách 21 phần tử, tất cả là empty, example keypoints[1] = [12,23]
         self.signID = None
-        self.old_kp_moving_point = [0, 0] # old coord of keypoint 0
-        self.sensitive = 7
+        self.old_kp_moving_point = [0, 0] # Old coordinates of keypoint 0
         self.moving_point = 0
         self.queue = queue
         self.last_mouse_x, self.last_mouse_y = pyautogui.position()
@@ -22,43 +23,49 @@ class MouseController:
         self.count_to_scroll = 0
         self.last_scroll_direction = ""
         self.scroll_count = 0
+        logging.basicConfig(filename='mouse_controller.log', level=logging.INFO,
+                            format='%(asctime)s - %(levelname)s - %(message)s')
 
     def main(self):
         while True:
             # Update from queue
             self.update()
             if self.signID is not None:
+                sensitive = self.sensitive_var.get()
                 # 4: moving, 1: close hand sign, 0: open hand sign, 5: left mouse press
                 if self.signID == 4:
-                    if self.is_left_pressed:
+                    if self.is_left_pressed or self.is_right_pressed:
                         self.left_release()
                         self.is_left_pressed = False
-                    if self.is_right_pressed:
                         self.right_release()
                         self.is_right_pressed = False
-                    self.moving(self.sensitive)
+                        logging.info("Released mouse buttons for signID 4")
+                    self.moving(sensitive)
                 elif self.signID == 1:
                     self.reset_mouse_reference()
                 elif self.signID == 5:
                     if not self.is_left_pressed:
                         self.left_press()
                         self.is_left_pressed = True
-                        self.moving(self.sensitive)
+                        logging.info("Left mouse pressed")
+                        self.moving(sensitive)
                     else:
-                        self.moving(self.sensitive)
+                        self.moving(sensitive)
                 elif self.signID == 6:
                     if not self.is_right_pressed:
                         self.right_press()
                         self.is_right_pressed = True
-                        self.moving(self.sensitive)
+                        logging.info("Right mouse pressed")
+                        self.moving(sensitive)
                     else:
-                        self.moving(self.sensitive)
+                        self.moving(sensitive)
                 elif self.signID == 7:
                     if self.is_left_pressed or self.is_right_pressed:
                         self.left_release()
                         self.is_left_pressed = False
                         self.right_press()
                         self.is_right_pressed = False
+                        logging.info("Released mouse buttons for signID 8")
                     self.scroll_up()
                 elif self.signID == 8:
                     if self.is_left_pressed or self.is_right_pressed:
@@ -66,46 +73,55 @@ class MouseController:
                         self.is_left_pressed = False
                         self.right_press()
                         self.is_right_pressed = False
+                        logging.info("Released mouse buttons for signID 8")
                     self.scroll_down()
-                print(f"hand_sign_id: {self.signID}")
+                else:  # Sửa đổi: Thêm nhánh else để thả chuột cho các signID không xác định
+                    if self.is_left_pressed or self.is_right_pressed:
+                        self.left_release()
+                        self.is_left_pressed = False
+                        self.right_release()
+                        self.is_right_pressed = False
+                        logging.info(f"Released mouse buttons for unknown signID {self.signID}")
+                # print(f"hand_sign_id: {self.signID}")
             time.sleep(0.005)
 
     def reset_mouse_reference(self):
         if len(self.keypoints[self.moving_point]) == 2:
             self.old_kp_moving_point = self.keypoints[self.moving_point].copy()
+            logging.info("Reset mouse reference")
         else:
-            print("Invalid keypoint data, skipping reset")
+            logging.warning("Invalid keypoint data, skipping reset")
         self.scroll_count = 0
         self.last_scroll_direction = ""
         self.count_to_scroll = 0
 
     def update(self):
         try:
-            landmark_list, hand_sign_id = self.queue.get_nowait()
+            landmark_list, hand_sign_id, _ = self.queue.get_nowait()
             if landmark_list is not None and hand_sign_id is not None:
                 if len(landmark_list) == 21 and all(len(coord) == 2 for coord in landmark_list):
                     self.keypoints = [[int(x), int(y)] for x, y in landmark_list]
                     self.signID = int(hand_sign_id)
                     if self.first_update:
-                        self.signID = 4  # Force signID to moving on first valid read
+                        self.signID = 4
                         self.first_update = False
                 else:
-                    print("Invalid landmark data, skipping update")
+                    logging.warning("Invalid landmark data, skipping update")
                     self.reset_state()
             elif landmark_list is None and hand_sign_id is None:
-                print("No landmark data, skipping update")
+                logging.info("No landmark data, resetting state")
                 self.reset_state()
         except multiprocessing.queues.Empty:
             pass
         except (ValueError, TypeError) as e:
-            print(f"Error processing queue data: {e}")
+            logging.error(f"Error processing queue data: {e}")
             self.reset_state()
 
     def reset_state(self):
         """Reset keypoints and signID on error to avoid stale data."""
         self.keypoints = [[] for _ in range(21)]
         self.signID = None
-
+        logging.info("State reset")
 
     # method for moving mouse
     def moving(self, sensitivity):

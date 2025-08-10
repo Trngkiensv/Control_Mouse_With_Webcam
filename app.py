@@ -11,7 +11,7 @@ import cv2 as cv
 import numpy as np
 import mediapipe as mp
 import multiprocessing
-
+import logging
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
@@ -37,7 +37,9 @@ def get_args():
     return args
 
 
-def main(queue):
+def main(queue, camera_queue):
+    logging.basicConfig(filename='app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.info("Starting app.py")
     # Argument parsing #################################################################
     args = get_args()
 
@@ -50,9 +52,16 @@ def main(queue):
     min_tracking_confidence = args.min_tracking_confidence
 
     use_brect = True
-
+    try:
+        cap_device = int(camera_queue.get_nowait())
+        logging.info(f"Initial camera ID from queue: {cap_device}")
+    except multiprocessing.queues.Empty:
+        logging.info(f"Using default camera ID: {cap_device}")
     # Camera preparation ###############################################################
-    cap = cv.VideoCapture(1)
+    cap = cv.VideoCapture(cap_device)
+    if not cap.isOpened():  # Sửa đổi: Kiểm tra lỗi mở camera
+        logging.error(f"Failed to open camera ID: {cap_device}")
+        return
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
@@ -104,10 +113,25 @@ def main(queue):
     min_send_interval = 0.05
     landmark_threshold = 50
     while True:
+        try:
+            new_camera_id = camera_queue.get_nowait()
+            if new_camera_id != str(cap_device):
+                cap.release()
+                cap_device = int(new_camera_id)
+                cap = cv.VideoCapture(cap_device)
+                if not cap.isOpened():
+                    logging.error(f"Failed to open new camera ID: {cap_device}")
+                    return
+                cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
+                cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+                logging.info(f"Switched to camera ID: {cap_device}")
+        except multiprocessing.queues.Empty:
+            pass
+
         fps = cvFpsCalc.get()
 
         # Process Key (ESC: end) #################################################
-        key = cv.waitKey(1)
+        key = cv.waitKey(10)
         if key == 27:  # ESC
             break
         number, mode = select_mode(key, mode)
@@ -165,14 +189,15 @@ def main(queue):
                             should_send = True
                 if should_send and (current_time - last_send_time) >= min_send_interval:
                     try:
-                        queue.put_nowait([landmark_list, send_sign_id])
-                        print(f"Sent to queue: signID={send_sign_id}")
+                        queue.put_nowait([landmark_list, send_sign_id, debug_image])
+                        logging.info(f"Sent to queue: signID={send_sign_id}")
                         last_landmark_list = landmark_list
                         last_send_time = current_time
                     except queue.Full:
-                        print("Queue full, skipping send")
+                        logging.warning("Queue full, skipping send")
 
-                if current_hand_sign_id == "Not applicable":
+                if current_hand_sign_id == keypoint_classifier_labels.index(
+                        "Not applicable") if "Not applicable" in keypoint_classifier_labels else False:
                     point_history.append(landmark_list[8])
                 else:
                     point_history.append([0, 0])
@@ -203,18 +228,20 @@ def main(queue):
             point_history.append([0, 0])
             if last_hand_sign_id is not None or last_landmark_list is not None:
                 try:
-                    queue.put_nowait([[], None])
-                    print("Sent empty data to queue (no hand detected)")
-                    last_landmark_list = None
-                    last_hand_sign_id = None
+                    if queue.qsize() < 900:
+                        queue.put_nowait([[], None, debug_image])
+                        logging.info("Sent empty data to queue (no hand detected)")
+                        last_landmark_list = None
+                        last_hand_sign_id = None
+                    else:
+                        logging.warning("Queue nearly full, skipping empty data")
                 except queue.Full:
-                    print("Queue full, skipping send")
-
+                    logging.warning("Queue full, skipping send")
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)
 
         # Screen reflection #############################################################
-        cv.imshow('Hand Gesture Recognition', debug_image)
+        # cv.imshow('Hand Gesture Recognition', debug_image)
 
     cap.release()
     cv.destroyAllWindows()
@@ -578,5 +605,6 @@ def draw_info(image, fps, mode, number):
 
 
 if __name__ == '__main__':
-    queue = multiprocessing.Queue()
-    main(queue)
+    queue = multiprocessing.Queue(maxsize=1000)  # Sửa đổi: Đặt maxsize cho queue
+    queue2 = multiprocessing.Queue(maxsize=1)    # Sửa đổi: Đặt maxsize cho camera_queue
+    main(queue, queue2)

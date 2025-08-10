@@ -5,6 +5,7 @@ from pygrabber.dshow_graph import FilterGraph
 from PIL import Image, ImageTk
 import cv2
 from app import main as app_main
+import logging
 from ControlMouseWithCam import MouseController
 
 class AppUI:
@@ -14,9 +15,11 @@ class AppUI:
         self.root.geometry("1270x700")
         self.root.configure(bg="white")
 
+        logging.basicConfig(filename='ui.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        logging.info("Starting UI")
         # Queue cho giao tiếp
         self.queue = multiprocessing.Queue(maxsize=1000)
-        self.camera_queue = multiprocessing.Queue(maxsize=1)  # Queue riêng cho camera ID
+        self.camera_queue = multiprocessing.Queue(maxsize=1)
 
         # Font chữ
         self.label_font = ("Arial", 12, "bold")
@@ -88,9 +91,14 @@ class AppUI:
 
         # Khởi động tiến trình
         self.app_process = multiprocessing.Process(target=app_main, args=(self.queue, self.camera_queue))
-        self.mouse_process = multiprocessing.Process(target=MouseController(self.queue, self.sensitive_var).main)
+        # Sửa đổi: Tạo instance MouseController trước và truyền hàm main
+        mouse_controller = MouseController(self.queue, self.sensitive_var)
+        self.mouse_process = multiprocessing.Process(target=mouse_controller.main)
         self.app_process.start()
         self.mouse_process.start()
+
+        # Cập nhật video và hand sign
+        self.update_video()
 
         # Cập nhật video và hand sign
         self.update_video()
@@ -102,58 +110,77 @@ class AppUI:
             devices = graph.get_input_devices()
             for i, device in enumerate(devices):
                 camera_list.append((str(i), device))
+            logging.info(f"Found cameras: {devices}")
         except Exception as e:
-            print(f"Error accessing cameras: {e}")
-
-        if not camera_list:
+            logging.error(f"Error accessing cameras: {e}")
             camera_list = [("0", "No Camera")]
 
-        self.camera_combo['values'] = [name for _, name in camera_list]
-        self.camera_ids = {name: id for id, name in camera_list}
         if camera_list:
+            self.camera_combo['values'] = [name for _, name in camera_list]
+            self.camera_ids = {name: id for id, name in camera_list}
             self.camera_var.set(camera_list[0][1])
         else:
-            self.camera_var.set("No Camera")
             self.camera_combo['values'] = ["No Camera"]
+            self.camera_var.set("No Camera")
+            self.camera_ids = {"No Camera": "0"}
 
     def change_camera(self, event):
         selected_camera = self.camera_var.get()
         camera_id = self.camera_ids.get(selected_camera, "0")
         try:
             self.camera_queue.put_nowait(camera_id)
-            print(f"Sent camera ID: {camera_id} ({selected_camera})")
+            logging.info(f"Sent camera ID: {camera_id} ({selected_camera})")  # Sửa đổi: Thay print bằng logging
         except multiprocessing.queues.Full:
-            print("Camera queue full, skipping")
+            logging.warning("Camera queue full, skipping")  # Sửa đổi: Thay print bằng logging
 
     def update_sensitivity(self, value):
-        print(f"Sensitivity: {self.sensitive_var.get()}")
+        logging.info(f"Sensitivity: {self.sensitive_var.get()}")
 
     def adjust_sensitivity(self, delta):
         current = self.sensitive_var.get()
         new_value = max(1.0, min(50.0, current + delta))
         self.sensitive_var.set(new_value)
-        print(f"Sensitivity adjusted to: {new_value}")
+        logging.info(f"Sensitivity adjusted to: {new_value}")
 
     def update_video(self):
         try:
             landmark_list, hand_sign_id, frame = self.queue.get_nowait()
-            if frame is not None:
+            if frame is not None and frame.size > 0:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame_rgb)
-                img = img.resize((960, 540), Image.Resampling.LANCZOS)  # Resize cho phù hợp
+                frame_width = self.video_frame.winfo_width()
+                frame_height = self.video_frame.winfo_height()
+                if frame_width > 1 and frame_height > 1:
+                    img = img.resize((frame_width, frame_height), Image.Resampling.LANCZOS)
+                else:
+                    img = img.resize((960, 540), Image.Resampling.LANCZOS)
                 imgtk = ImageTk.PhotoImage(image=img)
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
             if hand_sign_id is not None:
                 self.sign_var.set(self.sign_labels.get(hand_sign_id, "Unknown"))
+                logging.info(f"Updated hand sign: {self.sign_var.get()}")
         except multiprocessing.queues.Empty:
             pass
-        self.root.after(10, self.update_video)
+        except Exception as e:
+            logging.error(f"Error updating video: {e}")
+        self.root.after(20, self.update_video)
 
     def exit_app(self):
+        try:
+            # Sửa đổi: Xóa queue trước khi thoát
+            while not self.queue.empty():
+                self.queue.get_nowait()
+            while not self.camera_queue.empty():
+                self.camera_queue.get_nowait()
+            logging.info("Cleared queues")  # Sửa đổi: Thêm log
+        except multiprocessing.queues.Empty:
+            pass
         self.app_process.terminate()
         self.mouse_process.terminate()
+        logging.info("Terminated processes")  # Sửa đổi: Thêm log
         self.root.quit()
+        logging.info("UI closed")  # Sửa đổi: Thêm log
 
 if __name__ == "__main__":
     root = tk.Tk()
