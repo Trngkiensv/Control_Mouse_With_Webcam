@@ -15,6 +15,8 @@ import multiprocessing
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
+
+
 def get_args():
     parser = argparse.ArgumentParser()
 
@@ -37,26 +39,20 @@ def get_args():
     return args
 
 
-def main(queue):
-    # Argument parsing #################################################################
+def main(queue, camera_queue):
     args = get_args()
-
     cap_device = args.device
     cap_width = args.width
     cap_height = args.height
-
     use_static_image_mode = args.use_static_image_mode
     min_detection_confidence = args.min_detection_confidence
     min_tracking_confidence = args.min_tracking_confidence
-
     use_brect = True
 
-    # Camera preparation ###############################################################
     cap = cv.VideoCapture(1)
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
-    # Model load #############################################################
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=use_static_image_mode,
@@ -66,85 +62,69 @@ def main(queue):
     )
 
     keypoint_classifier = KeyPointClassifier()
-
     point_history_classifier = PointHistoryClassifier()
 
-    # Read labels ###########################################################
-    with open('model/keypoint_classifier/keypoint_classifier_label.csv',
-              encoding='utf-8-sig') as f:
+    with open('model/keypoint_classifier/keypoint_classifier_label.csv', encoding='utf-8-sig') as f:
         keypoint_classifier_labels = csv.reader(f)
-        keypoint_classifier_labels = [
-            row[0] for row in keypoint_classifier_labels
-        ]
-    with open(
-            'model/point_history_classifier/point_history_classifier_label.csv',
-            encoding='utf-8-sig') as f:
+        keypoint_classifier_labels = [row[0] for row in keypoint_classifier_labels]
+    with open('model/point_history_classifier/point_history_classifier_label.csv', encoding='utf-8-sig') as f:
         point_history_classifier_labels = csv.reader(f)
-        point_history_classifier_labels = [
-            row[0] for row in point_history_classifier_labels
-        ]
+        point_history_classifier_labels = [row[0] for row in point_history_classifier_labels]
 
-    # FPS Measurement ########################################################
     cvFpsCalc = CvFpsCalc(buffer_len=10)
-
-    # Coordinate history #################################################################
     history_length = 16
     point_history = deque(maxlen=history_length)
-
-    # Finger gesture history ################################################
     finger_gesture_history = deque(maxlen=history_length)
-
-    #  ########################################################################
     mode = 0
     last_landmark_list = None
     last_hand_sign_id = None
-    current_hand_sign_id = None
     sign_id_count = 0
     last_send_time = 0
-    min_send_interval = 0.05
+    min_send_interval = 0.01
     landmark_threshold = 50
-    while True:
-        fps = cvFpsCalc.get()
 
-        # Process Key (ESC: end) #################################################
+    while True:
+        try:
+            signal = camera_queue.get_nowait()
+            if signal == "exit":
+                break
+            new_camera_id = int(signal)
+            if new_camera_id != cap_device:
+                cap.release()
+                cap_device = new_camera_id
+                cap = cv.VideoCapture(cap_device)
+                cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
+                cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+                print(f"Switched to camera ID: {cap_device}")
+        except multiprocessing.queues.Empty:
+            pass
+
+        fps = cvFpsCalc.get()
         key = cv.waitKey(1)
         if key == 27:  # ESC
             break
         number, mode = select_mode(key, mode)
 
-        # Camera capture #####################################################
         ret, image = cap.read()
         if not ret:
             break
-        image = cv.flip(image, 1)  # Mirror display
+        image = cv.flip(image, 1)
         debug_image = copy.deepcopy(image)
-
-        # Detection implementation #############################################################
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-
         image.flags.writeable = False
         results = hands.process(image)
         image.flags.writeable = True
-
-        #  ####################################################################
+        # bien gui vao queue
+        landmark_list = []
+        hand_sign_id = None
         if results.multi_hand_landmarks is not None:
-            for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
-                                                  results.multi_handedness):
-                # Bounding box calculation
+            for hand_landmarks, handedness in zip(results.multi_hand_landmarks, results.multi_handedness):
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
-                # Landmark calculation
                 landmark_list = calc_landmark_list(debug_image, hand_landmarks)
+                pre_processed_landmark_list = pre_process_landmark(landmark_list)
+                pre_processed_point_history_list = pre_process_point_history(debug_image, point_history)
+                logging_csv(number, mode, pre_processed_landmark_list, pre_processed_point_history_list)
 
-                # Conversion to relative coordinates / normalized coordinates
-                pre_processed_landmark_list = pre_process_landmark(
-                    landmark_list)
-                pre_processed_point_history_list = pre_process_point_history(
-                    debug_image, point_history)
-                # Write to the dataset file
-                logging_csv(number, mode, pre_processed_landmark_list,
-                            pre_processed_point_history_list)
-
-                # Hand sign classification
                 current_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
                 should_send = False
                 send_sign_id = last_hand_sign_id
@@ -152,72 +132,54 @@ def main(queue):
 
                 if current_hand_sign_id == last_hand_sign_id:
                     sign_id_count += 1
-                    if sign_id_count >= 5:  # Lặp lại lần thứ hai
+                    if sign_id_count >= 5:
                         send_sign_id = current_hand_sign_id
                         should_send = True
                 else:
-                    sign_id_count = 1  # Reset đếm khi hand_sign_id thay đổi
+                    sign_id_count = 1
                     last_hand_sign_id = current_hand_sign_id
-                    # Gửi hand_sign_id cũ nếu lặp dưới 2 lần và keypoint 0 thay đổi
                     if last_landmark_list is not None and len(landmark_list) == 21 and last_hand_sign_id is not None:
                         diff = np.abs(np.array(landmark_list[0]) - np.array(last_landmark_list[0]))
                         if np.any(diff > landmark_threshold):
                             should_send = True
                 if should_send and (current_time - last_send_time) >= min_send_interval:
-                    try:
-                        queue.put_nowait([landmark_list, send_sign_id])
-                        print(f"Sent to queue: signID={send_sign_id}")
-                        last_landmark_list = landmark_list
-                        last_send_time = current_time
-                    except queue.Full:
-                        print("Queue full, skipping send")
+                    hand_sign_id = send_sign_id
+                    last_landmark_list = landmark_list
+                    last_send_time = current_time
 
                 if current_hand_sign_id == "Not applicable":
                     point_history.append(landmark_list[8])
                 else:
                     point_history.append([0, 0])
 
-                # Finger gesture classification
                 finger_gesture_id = 0
                 point_history_len = len(pre_processed_point_history_list)
                 if point_history_len == (history_length * 2):
-                    finger_gesture_id = point_history_classifier(
-                        pre_processed_point_history_list)
-
-                # Calculates the gesture IDs in the latest detection
+                    finger_gesture_id = point_history_classifier(pre_processed_point_history_list)
                 finger_gesture_history.append(finger_gesture_id)
-                most_common_fg_id = Counter(
-                    finger_gesture_history).most_common()
-
-                # Drawing part
+                most_common_fg_id = Counter(finger_gesture_history).most_common()
                 debug_image = draw_bounding_rect(use_brect, debug_image, brect)
                 debug_image = draw_landmarks(debug_image, landmark_list)
-                debug_image = draw_info_text(
-                    debug_image,
-                    brect,
-                    handedness,
-                    keypoint_classifier_labels[current_hand_sign_id],
-                    point_history_classifier_labels[most_common_fg_id[0][0]],
-                )
+                debug_image = draw_info_text(debug_image, brect, handedness,
+                                            keypoint_classifier_labels[current_hand_sign_id],
+                                            point_history_classifier_labels[most_common_fg_id[0][0]])
         else:
             point_history.append([0, 0])
-            if last_hand_sign_id is not None or last_landmark_list is not None:
-                try:
-                    queue.put_nowait([[], None])
-                    print("Sent empty data to queue (no hand detected)")
-                    last_landmark_list = None
-                    last_hand_sign_id = None
-                except queue.Full:
-                    print("Queue full, skipping send")
+            last_landmark_list = None
+            last_hand_sign_id = None
 
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)
-
-        # Screen reflection #############################################################
         cv.imshow('Hand Gesture Recognition', debug_image)
+        # Gửi frame qua queue
+        try:
+            queue.put_nowait([landmark_list, hand_sign_id, debug_image])
+        except queue.Full:
+            pass
 
     cap.release()
     cv.destroyAllWindows()
+
 
 def select_mode(key, mode):
     number = -1
@@ -579,4 +541,5 @@ def draw_info(image, fps, mode, number):
 
 if __name__ == '__main__':
     queue = multiprocessing.Queue()
-    main(queue)
+    camera_queue = multiprocessing.Queue()
+    main(queue, camera_queue)
